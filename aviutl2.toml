@@ -1,0 +1,28 @@
+#:schema ./.aviutl2-cli/aviutl2.schema.json
+#
+# ビルドと配布の設定（aviutl2-cli: https://github.com/sevenc-nanashi/aviutl2-cli）。
+#   au2 release   テストしてからビルドし、release/ に au2pkg を作る
+# project.version は Cargo.toml の version と揃える。
+
+[project]
+id = "HexBrowns.PaletteForge_H"
+name = "PaletteForge_H"
+version = "0.2.0"
+
+[artifacts."PaletteForge_H.aux2"]
+build = "cargo build --release"
+source = "target/release/palette_forge_h.dll"
+destination = "Plugin/PaletteForge_H/PaletteForge_H.aux2"
+
+[release]
+prebuild = [
+    "cargo test --lib",
+    'copy /b /y LICENSE + THIRD_PARTY_CRATES.md release\package.txt >nul',
+]
+package_template = "release/package.txt"
+package_information = "{name} v{version} by HexBrowns"
+
+[catalog]
+id = "HexBrowns.PaletteForge_H"
+license_path = { type = "MIT", path = "./LICENSE" }
+download_repo = { owner = "HexBrowns", repo = "PaletteForge_H" }
