@@ -3,6 +3,9 @@
 //! 台帳の場所は `ledger_path`。開発環境（`AI/palettes/palettes.json` がある）ではそれを使い、`AI/tools/build_palettes.py` と
 //! **互換**の形で同じファイルを読む。利用者の環境では `Plugin/PaletteForge_H/palettes.json`（データフォルダに `AI` を作らない）。
 //! 読めない台帳は `.broken-{秒}` へ退避し、上書きしない（ルール au2-plugin-checklist「設定ファイルの下位互換」）。
+//!
+//! 書くときは、その直前に読み直して自分の 1 件だけを足す・消す（`update_ledger_at`）。起動中に CLI が足したキャラを消さない。
+//! この版が知らない項目は `extra` に持って、そのまま書き戻す。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -114,6 +117,9 @@ pub struct Entry {
     pub neutral_bias: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semantic: Option<BTreeMap<String, String>>,
+    /// この版が知らない項目（新しい版や CLI が足したもの）。そのまま書き戻す
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Entry {
@@ -136,6 +142,16 @@ impl Entry {
             } else {
                 Some(semantic)
             },
+            extra: serde_json::Map::new(),
+        }
+    }
+
+    /// 色だけを `new` に替える。この版が知らない項目は残す
+    fn replace_keeping_extra(&mut self, new: Entry) {
+        let extra = std::mem::take(&mut self.extra);
+        *self = new;
+        for (k, v) in extra {
+            self.extra.entry(k).or_insert(v);
         }
     }
 
@@ -169,6 +185,8 @@ impl Entry {
 pub struct FixedSet {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core: Option<Entry>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -177,6 +195,8 @@ pub struct Ledger {
     pub fixed: FixedSet,
     #[serde(default)]
     pub characters: Vec<Entry>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Ledger {
@@ -184,10 +204,19 @@ impl Ledger {
         self.characters.iter().find(|c| c.name == name)
     }
 
+    /// 同じ名前があれば色を替え（知らない項目は残す）、無ければ末尾に足す
     pub fn upsert(&mut self, entry: Entry) {
         match self.characters.iter_mut().find(|c| c.name == entry.name) {
-            Some(slot) => *slot = entry,
+            Some(slot) => slot.replace_keeping_extra(entry),
             None => self.characters.push(entry),
+        }
+    }
+
+    /// Core の色を替える（知らない項目は残す）
+    pub fn set_core(&mut self, entry: Entry) {
+        match self.fixed.core.as_mut() {
+            Some(slot) => slot.replace_keeping_extra(entry),
+            None => self.fixed.core = Some(entry),
         }
     }
 
@@ -225,10 +254,29 @@ pub fn load_ledger_at(path: &Path) -> Ledger {
     }
 }
 
-pub fn save_ledger(ledger: &Ledger) -> Result<PathBuf> {
-    let path = ledger_path();
-    save_ledger_at(&path, ledger)?;
-    Ok(path)
+/// 台帳を読み直して `change` を当て、書き戻す。戻り値は書いた台帳（CLI が起動中に足した分も入っている）
+pub fn update_ledger(change: impl FnOnce(&mut Ledger)) -> Result<Ledger> {
+    update_ledger_at(&ledger_path(), change)
+}
+
+/// 書く直前にファイルを読み直し、`change`（自分の 1 件の追加・削除）だけを当てて書く。
+/// 起動時に読んだ台帳をそのまま書くと、起動中に CLI（`build_palettes.py`）が変えた分が消える。
+/// 読み直せない（壊れている・I/O エラー）ときは書かない（上書きすると、その中身が消える）
+pub fn update_ledger_at(path: &Path, change: impl FnOnce(&mut Ledger)) -> Result<Ledger> {
+    if SAVE_BLOCKED.load(Ordering::Acquire) {
+        bail!("台帳を読めなかったので、この起動の間は保存しません（{}）", path.display());
+    }
+    let mut ledger = match std::fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str::<Ledger>(text.trim_start_matches('\u{feff}'))
+            .with_context(|| format!("台帳を読み直せない（中身が壊れている）ので保存しません: {}", path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ledger::default(),
+        Err(e) => {
+            return Err(e).with_context(|| format!("台帳を読み直せないので保存しません: {}", path.display()));
+        }
+    };
+    change(&mut ledger);
+    save_ledger_at(path, &ledger)?;
+    Ok(ledger)
 }
 
 /// 一時ファイルに書いてから置き換える
@@ -292,6 +340,74 @@ mod tests {
             .collect();
         assert_eq!(moved.len(), 1);
         assert_eq!(std::fs::read_to_string(moved[0].path()).unwrap(), "{ broken");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn temp_ledger(tag: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("palette_forge_h_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("palettes.json");
+        (dir, path)
+    }
+
+    /// 起動時に読んだ後で CLI が足したキャラと、この版が知らない項目を、保存で消さない
+    #[test]
+    fn update_keeps_cli_changes_and_unknown_fields() {
+        let (dir, path) = temp_ledger("update");
+        std::fs::write(
+            &path,
+            r#"{"fixed":{"core":{"main":"7950f2","sub":"12b886","accent":"fd7e14","core_note":"x"},"websafe":true},
+"characters":[{"name":"a","main":"ff0000","sub":"00ff00","accent":"0000ff","tags":["主役"]}],"version":2}"#,
+        )
+        .unwrap();
+        // プラグインが起動時に読む
+        let startup = load_ledger_at(&path);
+        assert_eq!(startup.characters.len(), 1);
+        // 起動中に CLI が b を足す
+        let mut cli: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        cli["characters"].as_array_mut().unwrap().push(serde_json::json!({
+            "name": "b", "main": "111111", "sub": "222222", "accent": "333333"
+        }));
+        std::fs::write(&path, serde_json::to_string(&cli).unwrap()).unwrap();
+        // プラグインが a を直して保存し、新しいキャラ c も足す
+        let mut seeds = Seeds::default();
+        seeds.main = [1, 2, 3];
+        update_ledger_at(&path, |l| l.upsert(Entry::from_seeds("a", &seeds))).unwrap();
+        let after = update_ledger_at(&path, |l| l.upsert(Entry::from_seeds("c", &Seeds::default()))).unwrap();
+        let names: Vec<&str> = after.characters.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["a", "b", "c"], "CLI が足した b が残る");
+        // 書いたファイルに、知らない項目がそのまま残る
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["version"], 2);
+        assert_eq!(v["fixed"]["websafe"], true);
+        assert_eq!(v["fixed"]["core"]["core_note"], "x");
+        assert_eq!(v["characters"][0]["tags"][0], "主役");
+        assert_eq!(v["characters"][0]["main"], "010203");
+        // Core を直しても、Core の知らない項目は残る
+        update_ledger_at(&path, |l| l.set_core(Entry::from_seeds("", &seeds))).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["fixed"]["core"]["core_note"], "x");
+        assert_eq!(v["fixed"]["core"]["main"], "010203");
+        // 削除も 1 件だけ
+        let after = update_ledger_at(&path, |l| {
+            l.remove("a");
+        })
+        .unwrap();
+        assert_eq!(after.characters.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 保存の直前に読み直せない（壊れている）ときは書かない
+    #[test]
+    fn update_does_not_overwrite_broken_file() {
+        let (dir, path) = temp_ledger("update_broken");
+        std::fs::write(&path, "{ broken").unwrap();
+        assert!(update_ledger_at(&path, |l| l.upsert(Entry::from_seeds("a", &Seeds::default()))).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ broken");
+        // 無ければ作る
+        let fresh = dir.join("new.json");
+        assert_eq!(update_ledger_at(&fresh, |l| l.upsert(Entry::from_seeds("a", &Seeds::default()))).unwrap().characters.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
     use crate::theme::build_palette;

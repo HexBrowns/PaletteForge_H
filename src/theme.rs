@@ -116,7 +116,7 @@ fn build_row(role: &str, seed: [u8; 3], ladder: &[f64; 8], neutral_bias: Option<
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Seeds {
     pub main: [u8; 3],
     pub sub: [u8; 3],
@@ -172,6 +172,15 @@ pub struct Report {
 
 /// 仕様書 §5 の V1〜V6。
 pub fn validate(pal: &Palette) -> Report {
+    validate_inner(pal, true)
+}
+
+/// 画面に出す分（通らなかったルールと solid の上の文字色）だけを調べる。参考情報（`notes`）の文字列は作らない
+pub fn validate_issues(pal: &Palette) -> Report {
+    validate_inner(pal, false)
+}
+
+fn validate_inner(pal: &Palette, with_notes: bool) -> Report {
     let mut rep = Report::default();
     let flat = pal.flat();
 
@@ -212,7 +221,7 @@ pub fn validate(pal: &Palette) -> Report {
         }
         // V5 ガマットマッピングで C が半分以上削られたもの
         for (i, sw) in c.iter().enumerate() {
-            if sw.c_want > 0.0 && sw.c_fit < sw.c_want * 0.5 {
+            if with_notes && sw.c_want > 0.0 && sw.c_fit < sw.c_want * 0.5 {
                 rep.notes.push(format!(
                     "V5 {} {} は C が {:.3}→{:.3}（{:.0}% 削られた）",
                     row.role,
@@ -230,6 +239,9 @@ pub fn validate(pal: &Palette) -> Report {
         let white = on_white >= on_black;
         if ri < ROW_COUNT {
             rep.on_solid_white[ri] = white;
+        }
+        if !with_notes {
+            continue;
         }
         rep.notes.push(format!(
             "V6 {} solid #{} の上は {} 文字（白 {:.2}:1 / 黒 {:.2}:1）",
@@ -329,6 +341,21 @@ mod tests {
         assert!(!seed_clashes(&seeds).is_empty());
         let rep = validate(&build_palette(&seeds, Appearance::Light));
         assert!(rep.issues.iter().any(|i| i.starts_with("V4")));
+    }
+
+    #[test]
+    fn issues_only_matches_full_validation() {
+        let mut seeds = Seeds::default();
+        seeds.accent = parse_hex(SEMANTIC[1].1).unwrap();
+        for mode in [Appearance::Light, Appearance::Dark] {
+            let pal = build_palette(&seeds, mode);
+            let full = validate(&pal);
+            let quick = validate_issues(&pal);
+            assert_eq!(full.issues, quick.issues);
+            assert_eq!(full.on_solid_white, quick.on_solid_white);
+            assert!(quick.notes.is_empty());
+            assert!(!full.notes.is_empty());
+        }
     }
 
     #[test]

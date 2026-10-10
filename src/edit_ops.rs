@@ -9,24 +9,29 @@
 //! つまり**既存パレットの更新専用で、新規作成はできない**。新規のときはファイルを
 //! 書いて再起動してもらうしかない（PaletteHistory も同じ二段構えになっている）。
 
-use aviutl2::generic::{GlobalEditHandle, PaletteColor, PaletteInfo};
+use aviutl2::generic::{EditSectionError, GlobalEditHandle, PaletteColor, PaletteInfo};
 
+use crate::model::ApplyError;
 use crate::theme::Palette;
 
 pub static EDIT_HANDLE: GlobalEditHandle = GlobalEditHandle::new();
 
 /// 既存パレットを編集 API で更新する。存在しないパレットには失敗する。
-pub fn apply_palette(name: &str, pal: &Palette) -> Result<(), String> {
+///
+/// 失敗の理由を分けて返す。`call_edit_section` そのものの失敗は本体が編集を受け付けなかった
+/// （本体 2.1.13 からはドラッグ中・出力中などに失敗する）ので `Busy`、中の `set_palette_info` の失敗は
+/// 本体にそのパレットが無い（SDK「対象が見つからない場合は失敗します」）ので `Refused`。
+pub fn apply_palette(name: &str, pal: &Palette) -> Result<(), ApplyError> {
     if !EDIT_HANDLE.is_ready() {
-        return Err("編集 API の準備ができていない".to_string());
+        return Err(ApplyError::NotReady);
     }
     let flat = pal.flat();
     if flat.len() != PaletteInfo::PALETTE_NUM {
-        return Err(format!(
+        return Err(ApplyError::Other(format!(
             "色数が {} で、パレットの {} と合わない",
             flat.len(),
             PaletteInfo::PALETTE_NUM
-        ));
+        )));
     }
     let mut info = PaletteInfo {
         colors: [PaletteColor {
@@ -47,11 +52,17 @@ pub fn apply_palette(name: &str, pal: &Palette) -> Result<(), String> {
     }
 
     let name = name.to_string();
-    EDIT_HANDLE
-        .call_edit_section(move |edit| {
-            edit.set_palette_info(&name, &info)
-                .map_err(|e| e.to_string())
-        })
-        .map_err(|e| e.to_string())
-        .and_then(|r| r)
+    let pname = name.clone();
+    match EDIT_HANDLE.call_edit_section(move |edit| edit.set_palette_info(&name, &info)) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(EditSectionError::ApiCallFailed)) => {
+            tracing::debug!("PaletteForge_H: set_palette_info({pname}) を本体が受け付けなかった");
+            Err(ApplyError::Refused)
+        }
+        Ok(Err(e)) => Err(ApplyError::Other(e.to_string())),
+        Err(e) => {
+            tracing::warn!("PaletteForge_H: call_edit_section 失敗（{pname}）: {e}");
+            Err(ApplyError::Busy)
+        }
+    }
 }

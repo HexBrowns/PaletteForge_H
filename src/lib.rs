@@ -13,8 +13,10 @@
 
 pub mod color;
 pub mod line_edit;
+pub mod model;
 pub mod storage;
 pub mod theme;
+pub mod view;
 
 #[cfg(not(test))]
 pub mod edit_ops;
@@ -27,9 +29,10 @@ mod plugin {
     use std::sync::Arc;
 
     use aviutl2::AnyResult;
-    use parking_lot::{Mutex, RwLock};
+    use aviutl2::raw_window_handle::HasWindowHandle;
+    use parking_lot::Mutex;
 
-    use crate::ui::{AppState, PaletteForgeApp, SharedState};
+    use crate::ui::{PaletteForgeApp, SharedState};
 
     fn init_logging() {
         let _ = aviutl2::tracing_subscriber::fmt()
@@ -39,6 +42,8 @@ mod plugin {
                 aviutl2::tracing::Level::INFO
             })
             .event_format(aviutl2::logger::AviUtl2Formatter)
+            // 書き込み先を本体のログにする（無いと標準出力へ行き、本体のログに 1 行も残らない。v0.3.0 まで）
+            .with_writer(aviutl2::logger::AviUtl2LogWriter)
             .try_init();
     }
 
@@ -75,7 +80,7 @@ mod plugin {
             tracing::info!("PaletteForge_H v{} 初期化", env!("CARGO_PKG_VERSION"));
             Ok(Self {
                 window: Mutex::new(None),
-                state: Arc::new(RwLock::new(AppState::default())),
+                state: crate::ui::new_state(),
                 window_created: AtomicBool::new(false),
             })
         }
@@ -103,6 +108,12 @@ mod plugin {
                             if let Err(e) = registry.register_window_client("PaletteForge_H", &handle)
                             {
                                 tracing::error!("register_window_client 失敗: {e}");
+                            }
+                            // 見えていない間は描かない（`ui::window_visible`）
+                            if let Ok(raw) = handle.window_handle() {
+                                if let aviutl2::raw_window_handle::RawWindowHandle::Win32(h) = raw.as_raw() {
+                                    crate::ui::WINDOW_HWND.store(h.hwnd.get(), Ordering::Release);
+                                }
                             }
                         }
                         Err(e) => tracing::error!("PaletteForge_H ハンドル取得失敗: {e:#}"),
