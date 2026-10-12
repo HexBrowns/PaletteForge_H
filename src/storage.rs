@@ -167,7 +167,7 @@ impl Entry {
         if let Some(c) = parse_hex(&self.accent) {
             seeds.accent = c;
         }
-        if self.neutral_bias.is_finite() && (0.0..=0.05).contains(&self.neutral_bias) {
+        if self.neutral_bias.is_finite() && (0.0..=crate::theme::NEUTRAL_BIAS_MAX).contains(&self.neutral_bias) {
             seeds.neutral_bias = self.neutral_bias;
         }
         if let Some(over) = &self.semantic {

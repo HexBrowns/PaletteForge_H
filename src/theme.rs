@@ -13,6 +13,9 @@ pub const LADDER_LIGHT: [f64; 8] = [0.985, 0.932, 0.878, 0.805, 0.695, 0.600, 0.
 pub const LADDER_DARK: [f64; 8] = [0.170, 0.235, 0.298, 0.372, 0.462, 0.620, 0.752, 0.930];
 /// step6(solid) を頂点とする山型。Open Color v1.9.1 の実測から。
 pub const WEIGHT: [f64; 8] = [0.72, 0.78, 0.85, 0.92, 0.98, 1.00, 0.98, 0.88];
+/// ニュートラル彩度（ニュートラルの行の OKLCH の C）の上限。画面の範囲と読み込みの検査で同じ値を使う。
+/// v0.3.0 までは画面だけ 0.015 で、上限でも灰色からほとんど離れなかった（issues/20261012_neutral_bias_range_too_small.md）
+pub const NEUTRAL_BIAS_MAX: f64 = 0.05;
 
 pub const STEP_NAMES: [&str; 8] = [
     "base",
@@ -370,5 +373,26 @@ mod tests {
         assert!(rep.issues.iter().any(|i| i.starts_with("V1")));
         assert!(rep.issues.iter().any(|i| i.starts_with("V2")));
         assert!(rep.issues.iter().any(|i| i.starts_with("V4")));
+    }
+
+    /// 上限のニュートラル彩度で、ニュートラルの行が灰色から目に見えて離れる（v0.3.0 の 0.015 では最大 8 段しか動かなかった）
+    #[test]
+    fn neutral_bias_max_is_visibly_tinted() {
+        let spread = |bias: f64| {
+            let seeds = Seeds { neutral_bias: bias, ..Seeds::default() };
+            let pal = build_palette(&seeds, Appearance::Light);
+            pal.rows[0]
+                .colors
+                .iter()
+                .map(|c| {
+                    let (lo, hi) = (*c.rgb.iter().min().unwrap(), *c.rgb.iter().max().unwrap());
+                    hi - lo
+                })
+                .max()
+                .unwrap()
+        };
+        assert!(spread(0.0) <= 1, "0 は無彩色");
+        assert!(spread(NEUTRAL_BIAS_MAX) >= 24, "上限で色味が見える（{}）", spread(NEUTRAL_BIAS_MAX));
+        assert!(spread(0.015) < spread(NEUTRAL_BIAS_MAX));
     }
 }

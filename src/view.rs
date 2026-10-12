@@ -200,9 +200,10 @@ fn editor_panel(ui: &mut egui::Ui, model: &mut Model, backend: &mut dyn Backend,
     ui.horizontal_wrapped(|ui| {
         ui.add_sized([104.0, 18.0], egui::Label::new("ニュートラル彩度"));
         // スライダーの数値欄は Esc で戻せない（egui 0.36）ので、数値は別の欄に出す（`drag_value`）
-        ui.add(egui::Slider::new(&mut model.seeds.neutral_bias, 0.0..=0.015).show_value(false));
+        let max = crate::theme::NEUTRAL_BIAS_MAX;
+        ui.add(egui::Slider::new(&mut model.seeds.neutral_bias, 0.0..=max).show_value(false));
         drag_value(ui, &mut model.seeds.neutral_bias, |d| {
-            d.range(0.0..=0.015).speed(0.0001).fixed_decimals(3)
+            d.range(0.0..=max).speed(0.0002).fixed_decimals(3)
         });
     });
 

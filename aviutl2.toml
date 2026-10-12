@@ -7,7 +7,7 @@
 [project]
 id = "HexBrowns.PaletteForge_H"
 name = "PaletteForge_H"
-version = "0.3.0"
+version = "0.3.1"
 
 [artifacts."PaletteForge_H.aux2"]
 build = "cargo build --release"
