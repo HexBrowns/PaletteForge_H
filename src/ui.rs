@@ -64,6 +64,8 @@ impl Backend for HostBackend {
 pub struct PaletteForgeApp {
     state: SharedState,
     _handle: AviUtl2EframeHandle,
+    /// 本体のフォント（窓が見えてから読む。`host_fonts`）
+    host_fonts: crate::host_fonts::LazyFonts,
 }
 
 impl PaletteForgeApp {
@@ -75,10 +77,12 @@ impl PaletteForgeApp {
         cc.egui_ctx.all_styles_mut(|style| {
             style.visuals = aviutl2_eframe::aviutl2_visuals();
         });
-        cc.egui_ctx.set_fonts(aviutl2_eframe::aviutl2_fonts());
+        // 本体のフォントは窓が見えてから ui で読む（ここで読むと、本体の起動がこの窓の初期化を待つ間ずっと止まる。`host_fonts`）
+        let host_fonts = crate::host_fonts::LazyFonts::new(&handle);
         Self {
             state,
             _handle: handle,
+            host_fonts,
         }
     }
 }
@@ -86,6 +90,10 @@ impl PaletteForgeApp {
 impl eframe::App for PaletteForgeApp {
     // aviutl2-eframe はホストのウィンドウ内に描くので、update ではなく ui を実装する
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // 本体のフォントは窓が見えてから読む。読んだフレームは描かない（新しいフォントは次のフレームから効く。次のフレームは頼んである）
+        if self.host_fonts.load_if_visible(ui.ctx()) {
+            return;
+        }
         // 本体のパネルに出ていない間は描かない（eframe は隠れていても ui を呼び続ける）
         if !window_visible() {
             ui.ctx().request_repaint_after(HIDDEN_CHECK);

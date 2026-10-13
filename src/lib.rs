@@ -17,6 +17,7 @@ pub mod model;
 pub mod storage;
 pub mod theme;
 pub mod view;
+mod host_fonts;
 
 #[cfg(not(test))]
 pub mod edit_ops;
@@ -47,11 +48,39 @@ mod plugin {
             .try_init();
     }
 
+    /// 初期化にかかった時間をログに 1 行出す（強化デバッグ。仕様 `AI/specifications/20261012_CurveEditor_H_キーフレーム速度_spec.md` の 7.0）。
+    /// `register` の始めに作り、`register` を抜けるとき（途中の `return` も含む）に new と register の時間を出す
+    struct InitTimeLog {
+        new_time: std::time::Duration,
+        register_start: std::time::Instant,
+    }
+
+    impl InitTimeLog {
+        fn start(new_time: std::time::Duration) -> Self {
+            Self { new_time, register_start: std::time::Instant::now() }
+        }
+    }
+
+    impl Drop for InitTimeLog {
+        fn drop(&mut self) {
+            let register = self.register_start.elapsed();
+            let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+            aviutl2::tracing::info!(
+                "PaletteForge_H: 初期化 {:.1} ms（new {:.1} ms・register {:.1} ms）",
+                ms(self.new_time + register),
+                ms(self.new_time),
+                ms(register)
+            );
+        }
+    }
+
     #[aviutl2::plugin(GenericPlugin)]
     pub struct PaletteForgePlugin {
         window: Mutex<Option<aviutl2_eframe::EframeWindow>>,
         state: SharedState,
         window_created: AtomicBool,
+        /// `new` にかかった時間（初期化の時間をログに出すため。`InitTimeLog`）
+        init_new_time: std::time::Duration,
     }
 
     impl PaletteForgePlugin {
@@ -76,12 +105,14 @@ mod plugin {
 
     impl aviutl2::generic::GenericPlugin for PaletteForgePlugin {
         fn new(_info: aviutl2::AviUtl2Info) -> AnyResult<Self> {
+            let init_t0 = std::time::Instant::now();
             init_logging();
             tracing::info!("PaletteForge_H v{} 初期化", env!("CARGO_PKG_VERSION"));
             Ok(Self {
                 window: Mutex::new(None),
                 state: crate::ui::new_state(),
                 window_created: AtomicBool::new(false),
+                init_new_time: init_t0.elapsed(),
             })
         }
 
@@ -96,6 +127,8 @@ mod plugin {
         }
 
         fn register(&mut self, registry: &mut aviutl2::generic::HostAppHandle) {
+            // 抜けるときに初期化の時間をログに出す（`InitTimeLog`）
+            let _init_time = InitTimeLog::start(self.init_new_time);
             // set_palette_info で既存パレットをその場で更新するために要る
             crate::edit_ops::EDIT_HANDLE.init(registry.create_edit_handle());
             if let Err(e) = self.ensure_window() {

@@ -1,6 +1,6 @@
 [package]
 name = "palette-forge-h"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 license = "MIT"
 authors = ["HexBrowns"]
@@ -19,4 +19,4 @@ parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tracing = "0.1"
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_DirectWrite", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Memory", "Win32_UI_WindowsAndMessaging"] }
